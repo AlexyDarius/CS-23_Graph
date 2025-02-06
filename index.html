@@ -9,16 +9,16 @@
         body { font-family: Arial, sans-serif; }
         #network { width: 100%; height: 800px; border: 1px solid lightgray; margin-bottom: 20px; }
         #infoBox {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.95);
             padding: 10px;
             border: 1px solid #ddd;
-            background: #f9f9f9;
+            box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.2);
+            border-radius: 5px;
             display: none;
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            width: 300px;
-            max-width: 90%;
-            box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.1);
+            max-width: 300px;
+            font-size: 14px;
+            z-index: 1000;
         }
     </style>
 </head>
@@ -29,6 +29,12 @@
     <!-- JSON File Upload Option -->
     <input type="file" id="fileInput" accept=".json">
     
+    <!-- Dropdown to Select Subpart -->
+    <label for="subpartSelector">Select Subpart:</label>
+    <select id="subpartSelector" disabled>
+        <option value="">-- Select a Subpart --</option>
+    </select>
+    
     <!-- Graph Container -->
     <div id="network"></div>
 
@@ -36,19 +42,41 @@
     <div id="infoBox"></div>
 
     <script>
+        let jsonData = {};  // Store JSON data globally
+
         document.getElementById("fileInput").addEventListener("change", function(event) {
             const file = event.target.files[0];
             if (!file) return;
 
             const reader = new FileReader();
             reader.onload = function(e) {
-                const jsonData = JSON.parse(e.target.result);
-                buildGraph(jsonData);
+                jsonData = JSON.parse(e.target.result);
+                populateDropdown(jsonData);
             };
             reader.readAsText(file);
         });
 
-        function buildGraph(jsonData) {
+        // Populate dropdown with subparts
+        function populateDropdown(data) {
+            let subpartSelector = document.getElementById("subpartSelector");
+            subpartSelector.innerHTML = '<option value="">-- Select a Subpart --</option>';
+
+            Object.keys(data).forEach(subpart => {
+                let option = document.createElement("option");
+                option.value = subpart;
+                option.textContent = subpart;
+                subpartSelector.appendChild(option);
+            });
+
+            subpartSelector.disabled = false; // Enable dropdown
+            subpartSelector.addEventListener("change", function() {
+                if (this.value) {
+                    buildGraph(this.value);
+                }
+            });
+        }
+
+        function buildGraph(selectedSubpart) {
             let nodes = [];
             let edges = [];
             let nodeSet = new Set();
@@ -66,36 +94,35 @@
                 edges.push({ from, to });
             }
 
-            Object.entries(jsonData).forEach(([subpart, sections]) => {
-                addNode(subpart, subpart, subpart, "box", "blue");
+            let sections = jsonData[selectedSubpart]; // Get the selected subpart's data
+            addNode(selectedSubpart, selectedSubpart, selectedSubpart, "box", "blue");
 
-                sections.forEach(section => {
-                    let csId = `CS-${section["CS Number"]}`;
-                    addNode(csId, section["CS Number"], section["CS Name"], "ellipse", "green");
-                    addEdge(subpart, csId);
+            sections.forEach(section => {
+                let csId = `CS-${section["CS Number"]}`;
+                addNode(csId, section["CS Number"], section["CS Name"], "ellipse", "green");
+                addEdge(selectedSubpart, csId);
 
-                    if (section["CS Requirements"]) {
-                        section["CS Requirements"].forEach(req => {
-                            addNode(req["Requirement ID"], req["Requirement ID"], req["Content"], "dot", "purple");
-                            addEdge(csId, req["Requirement ID"]);
-                        });
-                    }
+                if (section["CS Requirements"]) {
+                    section["CS Requirements"].forEach(req => {
+                        addNode(req["Requirement ID"], req["Requirement ID"], req["Content"], "dot", "purple");
+                        addEdge(csId, req["Requirement ID"]);
+                    });
+                }
 
-                    if (section["AMCs"]) {
-                        section["AMCs"].forEach(amc => {
-                            let amcId = `AMC-${amc["AMC Number"]}`;
-                            addNode(amcId, amc["AMC Number"], amc["AMC Name"], "diamond", "red");
-                            addEdge(csId, amcId);
+                if (section["AMCs"]) {
+                    section["AMCs"].forEach(amc => {
+                        let amcId = `AMC-${amc["AMC Number"]}`;
+                        addNode(amcId, amc["AMC Number"], amc["AMC Name"], "diamond", "red");
+                        addEdge(csId, amcId);
 
-                            if (amc["Requirements"]) {
-                                amc["Requirements"].forEach(amcReq => {
-                                    addNode(amcReq["Requirement ID"], amcReq["Requirement ID"], amcReq["Content"], "triangle", "orange");
-                                    addEdge(amcId, amcReq["Requirement ID"]);
-                                });
-                            }
-                        });
-                    }
-                });
+                        if (amc["Requirements"]) {
+                            amc["Requirements"].forEach(amcReq => {
+                                addNode(amcReq["Requirement ID"], amcReq["Requirement ID"], amcReq["Content"], "triangle", "orange");
+                                addEdge(amcId, amcReq["Requirement ID"]);
+                            });
+                        }
+                    });
+                }
             });
 
             let container = document.getElementById("network");
@@ -108,7 +135,7 @@
                         direction: "UD",
                         sortMethod: "directed",
                         levelSeparation: 150, // More spacing between levels
-                        nodeSpacing: 200      // More spacing between nodes
+                        nodeSpacing: 250      // More spacing between nodes
                     }
                 },
                 physics: false,
@@ -125,26 +152,39 @@
 
             let network = new vis.Network(container, data, options);
 
-            // Show content box on node click
+            // Show content box on node click at cursor location
             network.on("click", function(params) {
                 if (params.nodes.length > 0) {
                     let nodeId = params.nodes[0];
                     let content = nodeData[nodeId] || "No additional information";
-                    showInfoBox(content);
+                    showInfoBox(content, params.event);
                 } else {
                     hideInfoBox();
                 }
             });
 
-            function showInfoBox(content) {
+            function showInfoBox(content, event) {
                 let infoBox = document.getElementById("infoBox");
                 infoBox.innerHTML = `<strong>Details:</strong><br>${content}`;
+
+                let offsetX = 15; // Offset from cursor
+                let offsetY = 15;
+
+                infoBox.style.left = event.clientX + offsetX + "px";
+                infoBox.style.top = event.clientY + offsetY + "px";
                 infoBox.style.display = "block";
             }
 
             function hideInfoBox() {
                 document.getElementById("infoBox").style.display = "none";
             }
+
+            // Hide the info box when clicking outside the nodes
+            document.addEventListener("click", function(event) {
+                if (!event.target.closest("#network") && !event.target.closest("#infoBox")) {
+                    hideInfoBox();
+                }
+            });
         }
     </script>
 
