@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS-AMC Hierarchical Network</title>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+    <style>
+        #network {
+            width: 100%;
+            height: 800px;
+            border: 1px solid lightgray;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>CS-AMC Hierarchical Network</h2>
+    <div id="network"></div>
+
+    <script>
+        // Function to fetch JSON data
+        async function loadJSON() {
+            try {
+                const response = await fetch("CS23_AMD4.json");
+                if (!response.ok) {
+                    throw new Error("Failed to load JSON file");
+                }
+                const jsonData = await response.json();
+                buildGraph(jsonData);
+            } catch (error) {
+                console.error("Error loading JSON:", error);
+                document.getElementById("network").innerHTML = "<p style='color:red;'>Failed to load JSON file.</p>";
+            }
+        }
+
+        function buildGraph(jsonData) {
+            let nodes = [];
+            let edges = [];
+            let nodeSet = new Set(); // Avoid duplicate nodes
+
+            function addNode(id, label, title, shape, color) {
+                if (!nodeSet.has(id)) {
+                    nodes.push({ id, label, title, shape, color });
+                    nodeSet.add(id);
+                }
+            }
+
+            function addEdge(from, to) {
+                edges.push({ from, to });
+            }
+
+            // Parse JSON and build the graph
+            Object.entries(jsonData).forEach(([subpart, sections]) => {
+                addNode(subpart, subpart, subpart, "box", "blue");
+
+                sections.forEach(section => {
+                    let csId = `CS-${section["CS Number"]}`;
+                    addNode(csId, section["CS Number"], section["CS Name"], "ellipse", "green");
+                    addEdge(subpart, csId);
+
+                    if (section["CS Requirements"]) {
+                        section["CS Requirements"].forEach(req => {
+                            addNode(req["Requirement ID"], req["Requirement ID"], req["Content"], "dot", "purple");
+                            addEdge(csId, req["Requirement ID"]);
+                        });
+                    }
+
+                    if (section["AMCs"]) {
+                        section["AMCs"].forEach(amc => {
+                            let amcId = `AMC-${amc["AMC Number"]}`;
+                            addNode(amcId, amc["AMC Number"], amc["AMC Name"], "diamond", "red");
+                            addEdge(csId, amcId);
+
+                            if (amc["Requirements"]) {
+                                amc["Requirements"].forEach(amcReq => {
+                                    addNode(amcReq["Requirement ID"], amcReq["Requirement ID"], amcReq["Content"], "triangle", "orange");
+                                    addEdge(amcId, amcReq["Requirement ID"]);
+                                });
+                            }
+                        });
+                    }
+                });
+            });
+
+            // Create a network
+            let container = document.getElementById("network");
+            let data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+
+            let options = {
+                layout: {
+                    hierarchical: {
+                        enabled: true,
+                        direction: "UD", // Up to Down
+                        sortMethod: "directed"
+                    }
+                },
+                physics: false, // Disable physics for hierarchical layout
+                edges: {
+                    arrows: "to",
+                    smooth: false
+                }
+            };
+
+            new vis.Network(container, data, options);
+        }
+
+        // Load JSON and build the network on page load
+        loadJSON();
+    </script>
+
+</body>
+</html>
