@@ -3,46 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CS-AMC Hierarchical Network</title>
-    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+    <title>CS-AMC Hierarchical Tree</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; }
-        #network { width: 100%; height: 600px; border: 1px solid lightgray; margin-bottom: 20px; }
-        #infoBox {
+        #tree-container { width: 100%; height: 2000px; border: 1px solid lightgray; margin-top: 20px; }
+        #loadingMessage {
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            margin-top: 10px;
+            display: none; /* Initially hidden */
+        }
+        .node circle {
+            stroke: black;
+            stroke-width: 1px;
+        }
+        .node text {
+            font: 12px sans-serif;
+        }
+        .link {
+            fill: none;
+            stroke: #555;
+            stroke-opacity: 0.6;
+            stroke-width: 1.5px;
+        }
+        .tooltip {
             position: absolute;
-            background: rgba(255, 255, 255, 0.95);
+            text-align: left;
             padding: 10px;
-            border: 1px solid #ddd;
-            box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.2);
-            border-radius: 5px;
-            display: none;
-            max-width: 300px;
-            font-size: 14px;
-            z-index: 1000;
+            background: white;
+            border: 2px solid black;
+            border-radius: 10px;
+            width: 300px;
+            pointer-events: none;
+            visibility: hidden;
         }
     </style>
 </head>
 <body>
 
-    <h2>CS-AMC Hierarchical Network</h2>
-    
-    <!-- JSON File Upload Option -->
+    <h2>CS-AMC Hierarchical Tree</h2>
+
+    <!-- File Upload -->
     <input type="file" id="fileInput" accept=".json">
-    
-    <!-- Dropdown to Select Subpart -->
+
+    <!-- Dropdown Selector -->
     <label for="subpartSelector">Select Subpart:</label>
     <select id="subpartSelector" disabled>
         <option value="">-- Select a Subpart --</option>
     </select>
-    
-    <!-- Graph Container -->
-    <div id="network"></div>
 
-    <!-- Info Box for Node Details -->
-    <div id="infoBox"></div>
+    <!-- Loading Indicator -->
+    <div id="loadingMessage">Loading tree... Please wait.</div>
+
+    <!-- Graph Container -->
+    <div id="tree-container"></div>
+    
+    <!-- Tooltip for Right-Click Node Details -->
+    <div id="tooltip" class="tooltip"></div>
 
     <script>
-        let jsonData = {};  // Store JSON data globally
+        let jsonData = {};
 
         document.getElementById("fileInput").addEventListener("change", function(event) {
             const file = event.target.files[0];
@@ -56,7 +78,6 @@
             reader.readAsText(file);
         });
 
-        // Populate dropdown with subparts
         function populateDropdown(data) {
             let subpartSelector = document.getElementById("subpartSelector");
             subpartSelector.innerHTML = '<option value="">-- Select a Subpart --</option>';
@@ -68,124 +89,200 @@
                 subpartSelector.appendChild(option);
             });
 
-            subpartSelector.disabled = false; // Enable dropdown
+            subpartSelector.disabled = false;
             subpartSelector.addEventListener("change", function() {
                 if (this.value) {
-                    buildGraph(this.value);
+                    buildTree(jsonData[this.value]);
                 }
             });
         }
 
-        function buildGraph(selectedSubpart) {
-            let nodes = [];
-            let edges = [];
-            let nodeSet = new Set();
-            let nodeData = {}; // Store full node info
+        function buildTree(data) {
+            console.time("Tree Render Time"); // Track time taken
+            document.getElementById("loadingMessage").style.display = "block"; // Show loading message
+            setTimeout(() => {
+                d3.select("svg").remove(); // Clear previous tree
 
-            function addNode(id, label, title, shape, color) {
-                if (!nodeSet.has(id)) {
-                    nodes.push({ id, label, title, shape, color });
-                    nodeData[id] = title; // Store the content for displaying on click
-                    nodeSet.add(id);
+                const margin = { top: 20, right: 120, bottom: 20, left: 120 },
+                      width = 1600 - margin.left - margin.right,
+                      height = 2000 - margin.top - margin.bottom;
+
+                const svg = d3.select("#tree-container").append("svg")
+                    .attr("width", width + margin.left + margin.right)
+                    .attr("height", height + margin.top + margin.bottom)
+                  .append("g")
+                    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+                let i = 0;
+                const root = d3.hierarchy(formatSubpartData(data));
+                const treeLayout = d3.tree().size([height, width]);
+                root.x0 = height / 2;
+                root.y0 = 0;
+
+                root.children.forEach(collapse);
+                update(root);
+
+                function collapse(d) {
+                    if (d.children) {
+                        d._children = d.children;
+                        d.children = null;
+                    }
                 }
-            }
 
-            function addEdge(from, to) {
-                edges.push({ from, to });
-            }
+                function update(source) {
+                    const treeData = treeLayout(root);
+                    const nodes = treeData.descendants();
+                    const links = treeData.links();
 
-            let sections = jsonData[selectedSubpart]; // Get the selected subpart's data
-            addNode(selectedSubpart, selectedSubpart, selectedSubpart, "box", "blue");
+                    nodes.forEach(d => { d.y = d.depth * 250 });
 
-            sections.forEach(section => {
-                let csId = `CS-${section["CS Number"]}`;
-                addNode(csId, section["CS Number"], section["CS Name"], "ellipse", "green");
-                addEdge(selectedSubpart, csId);
+                    const node = svg.selectAll('g.node')
+                        .data(nodes, d => d.id || (d.id = ++i));
 
-                if (section["CS Requirements"]) {
-                    section["CS Requirements"].forEach(req => {
-                        addNode(req["Requirement ID"], req["Requirement ID"], req["Content"], "dot", "purple");
-                        addEdge(csId, req["Requirement ID"]);
+                    const nodeEnter = node.enter().append('g')
+                        .attr('class', 'node')
+                        .attr("transform", d => `translate(${source.y0},${source.x0})`)
+                        .on('click', click)
+                        .on('contextmenu', rightClick);
+
+                    nodeEnter.append('circle')
+                        .attr('r', 1e-6)
+                        .style("fill", d => d._children ? "lightsteelblue" : "#fff");
+
+                    nodeEnter.append('text')
+                        .attr("dy", ".35em")
+                        .attr("x", d => d.children || d._children ? -13 : 13)
+                        .attr("text-anchor", d => d.children || d._children ? "end" : "start")
+                        .text(d => d.data.name);
+
+                    const nodeUpdate = nodeEnter.merge(node);
+
+                    nodeUpdate.transition()
+                        .duration(750)
+                        .attr("transform", d => `translate(${d.y},${d.x})`);
+
+                    nodeUpdate.select('circle')
+                        .attr('r', 8)
+                        .style("fill", d => d._children ? "lightsteelblue" : "#fff");
+
+                    const nodeExit = node.exit().transition()
+                        .duration(750)
+                        .attr("transform", d => `translate(${source.y},${source.x})`)
+                        .remove();
+
+                    nodeExit.select('circle')
+                        .attr('r', 1e-6);
+
+                    const link = svg.selectAll('path.link')
+                        .data(links, d => d.target.id);
+
+                    const linkEnter = link.enter().insert('path', "g")
+                        .attr("class", "link")
+                        .attr('d', d => {
+                            const o = {x: source.x0, y: source.y0};
+                            return diagonal(o, o);
+                        });
+
+                    const linkUpdate = linkEnter.merge(link);
+
+                    linkUpdate.transition()
+                        .duration(750)
+                        .attr('d', d => diagonal(d.source, d.target));
+
+                    const linkExit = link.exit().transition()
+                        .duration(750)
+                        .attr('d', d => {
+                            const o = {x: source.x, y: source.y};
+                            return diagonal(o, o);
+                        })
+                        .remove();
+
+                    nodes.forEach(d => {
+                        d.x0 = d.x;
+                        d.y0 = d.y;
                     });
-                }
 
-                if (section["AMCs"]) {
-                    section["AMCs"].forEach(amc => {
-                        let amcId = `AMC-${amc["AMC Number"]}`;
-                        addNode(amcId, amc["AMC Number"], amc["AMC Name"], "diamond", "red");
-                        addEdge(csId, amcId);
+                    function diagonal(s, d) {
+                        return `M${s.y},${s.x}
+                                C${(s.y + d.y) / 2},${s.x}
+                                ${(s.y + d.y) / 2},${d.x}
+                                ${d.y},${d.x}`;
+                    }
 
-                        if (amc["Requirements"]) {
-                            amc["Requirements"].forEach(amcReq => {
-                                addNode(amcReq["Requirement ID"], amcReq["Requirement ID"], amcReq["Content"], "triangle", "orange");
-                                addEdge(amcId, amcReq["Requirement ID"]);
-                            });
+                    function click(event, d) {
+                        // ✅ LEFT CLICK: Show Node Content
+                        let tooltip = document.getElementById("tooltip");
+                        tooltip.innerHTML = `<strong>${d.data.name}</strong><br/>${d.data.content || "No additional info"}`;
+                        tooltip.style.left = `${event.pageX + 10}px`;
+                        tooltip.style.top = `${event.pageY + 10}px`;
+                        tooltip.style.visibility = "visible";
+                    }
+
+                    function rightClick(event, d) {
+                        event.preventDefault();  // Prevent default right-click menu
+
+                        // ✅ RIGHT CLICK: Expand/Collapse Node
+                        if (d.children) {
+                            d._children = d.children;
+                            d.children = null;
+                        } else {
+                            d.children = d._children;
+                            d._children = null;
                         }
+                        update(d);
+                    }
+
+                    console.timeEnd("Tree Render Time"); // Log the total render time
+                    document.getElementById("loadingMessage").style.display = "none"; // Hide loading message
+                }
+            }, 50);
+        }
+
+        document.addEventListener("click", function (event) {
+            let tooltip = document.getElementById("tooltip");
+            if (tooltip.style.visibility === "visible" && !event.target.closest(".node")) {
+                tooltip.style.visibility = "hidden";
+            }
+        });
+
+        function formatSubpartData(subpartData) {
+            const root = { name: "CS Regulations", children: [] };
+
+            subpartData.forEach(section => {
+                let csNode = { 
+                    name: section["CS Number"], 
+                    content: section["CS Name"], 
+                    children: [] 
+                };
+
+                if (Array.isArray(section["CS Requirements"])) {  // ✅ Fix: Check if exists
+                    section["CS Requirements"].forEach(req => {
+                        csNode.children.push(processRequirement(req));
                     });
                 }
+
+                root.children.push(csNode);
             });
 
-            let container = document.getElementById("network");
-            let data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+            return root;
+        }
 
-            let options = {
-                layout: {
-                    hierarchical: {
-                        enabled: true,
-                        direction: "UD",
-                        sortMethod: "directed",
-                        levelSeparation: 150, // More spacing between levels
-                        nodeSpacing: 250      // More spacing between nodes
-                    }
-                },
-                physics: false,
-                edges: {
-                    arrows: "to",
-                    smooth: false
-                },
-                nodes: {
-                    shape: "box",
-                    font: { size: 14 },
-                    margin: 15
-                }
+        function processRequirement(req) {
+            let node = { 
+                name: req["Requirement ID"], 
+                content: req["Content"], 
+                children: [] 
             };
 
-            let network = new vis.Network(container, data, options);
-
-            // Show content box on node click at cursor location
-            network.on("click", function(params) {
-                if (params.nodes.length > 0) {
-                    let nodeId = params.nodes[0];
-                    let content = nodeData[nodeId] || "No additional information";
-                    showInfoBox(content, params.event);
-                } else {
-                    hideInfoBox();
-                }
-            });
-
-            function showInfoBox(content, event) {
-                let infoBox = document.getElementById("infoBox");
-                infoBox.innerHTML = `<strong>Details:</strong><br>${content}`;
-
-                let offsetX = 15; // Offset from cursor
-                let offsetY = 15;
-
-                infoBox.style.left = event.clientX + offsetX + "px";
-                infoBox.style.top = event.clientY + offsetY + "px";
-                infoBox.style.display = "block";
+            if (Array.isArray(req["Children"])) {  // ✅ Fix: Check before looping
+                req["Children"].forEach(child => {
+                    node.children.push(processRequirement(child));
+                });
             }
 
-            function hideInfoBox() {
-                document.getElementById("infoBox").style.display = "none";
-            }
-
-            // Hide the info box when clicking outside the nodes
-            document.addEventListener("click", function(event) {
-                if (!event.target.closest("#network") && !event.target.closest("#infoBox")) {
-                    hideInfoBox();
-                }
-            });
+            return node;
         }
+
     </script>
 
 </body>
